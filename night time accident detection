@@ -1,0 +1,820 @@
+namespace Juri.Art136.SmartClient
+{
+    #region USINGS
+    using Juri.Art136.Classes;
+    using Juri.Art136.CustomControls;
+    using Juri.Art136.Enums;
+    using Juri.Art136.Extentions;
+    using Juri.Art136.SmartClient.PopuWebservice;
+    using MutSocMut.Framework.ErrorHandling;
+    using System;
+    using System.Collections.Generic;
+    using System.Data;
+    using System.Globalization;
+    using System.Linq;
+    using System.ServiceModel;
+    using System.Windows.Forms;
+
+    #endregion
+
+    /// <summary> ManageAccident Window: 
+    /// 1- Possibility to Associate an Accident To an other
+    /// 2- Possibility to print a declaration
+    /// 3- Cancel ans Close 
+    /// </summary>
+    public partial class ManageAccident : UserControl
+    {
+        #region VARIABLES
+        private string group, key, previousGroup, previousKey;
+        private int toDoId;
+        private List<DetectionAccidentType> detectionAccidentTypeList;
+        private List<DetectionSource> detectionSourceList;
+        private short federation;
+        private List<Detection> currentDetections;
+        private List<Accident> accidentsToLink;
+        private List<Detection> allDetections;
+        private List<InquiryPhase> inquiryPhases;
+        private bool isFromInquiry;
+        private AccidentHeader header;
+        private Accident currentAccident;
+        #endregion
+
+        #region CONSTRUCTORS
+        /// <summary> Initializes a new instance of the <see cref="ManageAccident"/> class.
+        /// </summary>
+        /// <param name="group">The group.</param>
+        /// <param name="key">The key.</param>
+        /// <param name="previousGroup">The previous group.</param>
+        /// <param name="previousKey">The previous key.</param>
+        public ManageAccident(string group, string key, string previousGroup, string previousKey)
+        {
+            InitializeComponent();
+
+            this.group = group;
+            this.key = key;
+            this.previousKey = previousKey;
+            this.previousGroup = previousGroup;
+        }
+
+        /// <summary> Initializes a new instance of the <see cref="ManageAccident"/> class.
+        /// </summary>
+        /// <param name="accidentId">The accident id.</param>
+        /// <param name="toDoId">To do id.</param>
+        /// <param name="group">The group.</param>
+        /// <param name="key">The key.</param>
+        /// <param name="previousGroup">The previous group.</param>
+        /// <param name="previousKey">The previous key.</param>
+        public ManageAccident(int accidentId, int toDoId, string group, string key, string previousGroup, string previousKey)
+            : this(group, key, previousGroup, previousKey)
+        {
+            this.toDoId = toDoId;
+            CreateScreen(accidentId);
+        }
+
+        /// <summary> Initializes a new instance of the <see cref="ManageAccident"/> class.
+        /// </summary>
+        /// <param name="accident">The accident.</param>
+        /// <param name="otherAccidents">The other accidents.</param>
+        /// <param name="inquiry">The inquiry.</param>
+        /// <param name="group">The group.</param>
+        /// <param name="key">The key.</param>
+        /// <param name="previousGroup">The previous group.</param>
+        /// <param name="previousKey">The previous key.</param>
+        public ManageAccident(Accident accident, List<Accident> otherAccidents, InquiryFull inquiry, string group, string key, string previousGroup, string previousKey)
+            : this(group, key, previousGroup, previousKey)
+        {
+            this.isFromInquiry = true;
+            this.currentAccident = accident;
+            CreateScreen(otherAccidents, inquiry);
+        }
+        #endregion
+
+        #region EVENTS
+        /// <summary> Handles the Load event of the ManageAccident control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        private void ManageAccident_Load(object sender, EventArgs e)
+        {
+            try
+            {
+                TranslateComponent();
+
+                if (this.currentAccident != null)
+                {
+                    InitializeHeader();
+
+                    A136Helper.MainScreen.ViewExplorerBarItem(this.group, this.key, true, this.header.AccidentNumber);
+                }
+                else
+                {
+                    // Accident already treated.
+                    A136Helper.WarningMessage(Properties.Resources.ErrorNoAccidentsFound, Properties.Resources.Accidents);
+                    TreatToDo();
+                    CloseScreen();
+                }
+            }
+            catch
+            {
+                CloseScreen();
+                throw;
+            }
+        }
+
+        /// <summary> Handles the ControlAdded event of the pnlHeader control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.Windows.Forms.ControlEventArgs"/> instance containing the event data.</param>
+        private void pnlHeader_ControlAdded(object sender, ControlEventArgs e)
+        {
+            e.Control.Dock = DockStyle.Fill;
+        }
+
+        /// <summary> Handles the Click event of the btnCancel control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        private void btnCancel_Click(object sender, EventArgs e)
+        {
+            CloseScreen();
+        }
+
+        /// <summary> Handles the DataSourceChanged event of the dtgDetections control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        private void dtgDetections_DataSourceChanged(object sender, EventArgs e)
+        {
+            A136Helper.InitializeGridLayoutDetection(dtgDetections, false);
+        }
+
+        /// <summary> Handles the DataSourceChanged event of the dtgtLink control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        private void dtgtLink_DataSourceChanged(object sender, EventArgs e)
+        {
+            A136Helper.InitializeGridLayoutAccident(dtgtLink.DataGridView);
+        }
+
+        /// <summary> Handles the SubFormShowing event of the dtgtLink control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="Juri.Art136.CustomControls.SubFormShowEventArgs"/> instance containing the event data.</param>
+        private void dtgtLink_SubFormShowing(object sender, SubFormShowEventArgs e)
+        {
+            if (e.DataGridView.Name == "Detection")
+            {
+                A136Helper.InitializeGridLayoutDetection(e.DataGridView, false);
+            }
+        }
+
+        /// <summary> Handles the DataSourceChanged event of the dtgDetections control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        private void dtgDetections_DataSourceChanged_Alternative(object sender, EventArgs e)
+        {
+            A136Helper.InitializeGridLayoutInquiry(dtgDetections);
+        }
+
+        /// <summary> Handles the Click event of the btnLink control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        private void btnLink_Click(object sender, EventArgs e)
+        {
+            if (dtgtLink.DataGridView.SelectedRows.Count != 0)
+            {
+                int accidentIdToLink = ParsingString.ParseToInt(dtgtLink.DataGridView.SelectedRows[0].Cells[Accident.AccidentIdFieldName].Value.ToString());
+                if (accidentIdToLink >= 0)
+                {
+                    try
+                    {
+                        //Tdpfrg : ADD Test if there is a linked dossier 
+                        Dossier dossier = DossierProxy.GetDossiers(0, this.currentAccident.AccidentId.Value.ToString(CultureInfo.CurrentCulture), "AccidentIdentity").FirstOrDefault();
+                        if (dossier == null)
+                        {
+                            AccidentProxy.ReBindAccident(this.currentAccident.AccidentId.Value, accidentIdToLink);
+                            TreatToDo();
+
+                            A136Helper.MainScreen.CloseScreen(this.group, this.key, this.previousGroup, this.previousKey, true);
+
+                            if (this.isFromInquiry)
+                            {
+                                A136Helper.MainScreen.CloseScreen(this.previousGroup, this.previousKey, string.Empty, string.Empty, true);
+                            }
+                        }
+                        else
+                        {
+                            string message = Properties.Resources.LabelLinkedDossiers;
+                            string title = btnLink.Text;
+                            A136Helper.ErrorMessage(message, title);
+                        }
+                    }
+                    finally
+                    {
+                        Cursor.Current = Cursors.Default;
+                    }
+                }
+            }
+        }
+
+        /// <summary> Handles the Click event of the btnPrintInquiry control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        private void btnPrintInquiry_Click(object sender, EventArgs e)
+        {
+            Cursor.Current = Cursors.WaitCursor;
+            int prtResult = 0;
+
+            try
+            {
+                // get member for language.
+                string language = string.Empty;
+                FullMemberClass member = FullMemberClass.GetByNationalNumber(this.currentAccident.MemberNiss.ToString());
+                if (member != null && member.IsMember)
+                {
+                    language = member.ShortLanguage;
+                }
+
+                prtResult = InquiryProxy.ImprimInquiry(this.currentAccident, UserClient.Login, UserClient.CurrentPrinter, this.federation.ToString(CultureInfo.CurrentCulture), language, true);
+            }
+            catch (FaultException<FaultDetail> fex)
+            {
+                ClearToDo();
+                A136Helper.ErrorMessage(fex, Properties.Resources.AccidentButtonImprim);
+            }
+            catch (Exception ex)
+            {
+                ClearToDo();
+                A136Helper.ErrorMessage(ex, Properties.Resources.AccidentButtonImprim);
+            }
+
+            try
+            {
+                if (prtResult == 0)
+                {
+                    TreatToDo();
+                    A136Helper.MainScreen.CloseScreen(this.group, this.key, this.previousGroup, this.previousKey, true);
+                }
+                else
+                {
+                    Cursor.Current = Cursors.Default;
+                    string title = btnPrintInquiry.Text;
+                    string message = string.Empty;
+
+                    if (prtResult >= Enum.GetNames(typeof(PrintLetterErrorCode)).Length)
+                    {
+                        message = Properties.Resources.PrintLetterError99 + " (" + prtResult + ")";
+                    }
+                    else
+                    {
+                        message = Properties.Resources.ResourceManager.GetString("PrintLetterError" + prtResult, CultureInfo.CurrentCulture);
+                    }
+
+                    A136Helper.ErrorMessage(message, title);
+
+                    if ((prtResult == (int)PrintLetterErrorCode.No_Mandataris_Found) || (prtResult == (int)PrintLetterErrorCode.InquiryAlreadyExist))
+                    {
+                        List<Inquiry> inquiryList = InquiryProxy.GetInquiriesByAccidentId(this.federation, this.currentAccident.AccidentId.Value);
+                        if (inquiryList != null && inquiryList.Any())
+                        {
+                            int inquiryId = inquiryList.First().InquiryId.Value;
+                            string inquiryNumber = inquiryList.First().InquiryNum.ToString();
+
+                            // Open inquiryscreen.
+                            A136Helper.MainScreen.OpenInquiryScreen(inquiryId, inquiryNumber, this.group, this.key);
+
+                            // set todo to treated.
+                            TreatToDo();
+
+                            // remove this screen.
+                            A136Helper.MainScreen.CloseScreen(this.group, this.key, string.Empty, string.Empty, true);
+                        }
+                    }
+                }
+            }
+            catch (FaultException<FaultDetail> fex)
+            {
+                ClearToDo();
+                A136Helper.ErrorMessage(fex, Properties.Resources.AccidentButtonImprim);
+            }
+            catch (Exception ex)
+            {
+                ClearToDo();
+                A136Helper.ErrorMessage(ex, Properties.Resources.AccidentButtonImprim);
+            }
+            finally
+            {
+                Cursor.Current = Cursors.Default;
+            }
+        }
+
+        /// <summary> Handles the Click event of the btnDetail control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        private void btnDetail_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (dtgtLink.DataGridView.SelectedRows.Count > 0)
+                {
+                    int accidentId = ParsingString.ParseToInt(dtgtLink.DataGridView.SelectedRows[0].Cells[Accident.AccidentIdFieldName].Value.ToString());
+                    string accidentNumber = dtgtLink.DataGridView.SelectedRows[0].Cells[Accident.AccidentNumFieldName].Value.ToString();
+
+                    A136Helper.MainScreen.OpenNewViewAccidentScreen(accidentId, accidentNumber, this.group, this.group, this.key);
+                }
+            }
+            catch (FaultException<FaultDetail> fex)
+            {
+                ClearToDo();
+                A136Helper.ErrorMessage(fex, Properties.Resources.NoAccidentsFound);
+            }
+        }
+
+        /// <summary> Handles the SelectionChanged event of the dtgtLink control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.EventArgs"/> instance containing the event data.</param>
+        private void dtgtLink_SelectionChanged(object sender, EventArgs e)
+        {
+            //If association is possible set to true
+            if (string.IsNullOrEmpty(lblInfo.Text))
+            {
+                btnLink.Enabled = true;
+            }
+
+            // Allow to view detail of accident, but not detection (when child row is selected) (luc 22/1/10)
+            if (dtgtLink.DataGridView.SelectedRows.Count > 0)
+            {
+                btnDetail.Enabled = true;
+            }
+            else
+            {
+                btnDetail.Enabled = false;
+            }
+        }
+
+        /// <summary> Handles the RowHeaderMouseDoubleClick event of the dtgDetections control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="System.Windows.Forms.DataGridViewCellMouseEventArgs"/> instance containing the event data.</param>
+        private void dtgDetections_RowHeaderMouseDoubleClick(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            dtgDetections.Enabled = false;
+            Cursor.Current = Cursors.WaitCursor;
+
+            try
+            {
+                if (e.RowIndex > -1)
+                {
+                    Detection detection = this.currentDetections.FirstOrDefault(d => d.DetectionId == ParsingString.ParseToInt(dtgDetections.Rows[e.RowIndex].Cells[Detection.DetectionIdFieldName].Value.ToString()));
+                    if (detection != null)
+                    {
+                        A136Helper.MainScreen.OpenNewShowDetectionScreen(detection, this.group, this.group, this.key);
+                    }
+                }
+            }
+            finally
+            {
+                dtgDetections.Enabled = true;
+                Cursor.Current = Cursors.Default;
+            }
+
+        }
+        #endregion
+
+        #region PRIVATE
+        /// <summary> Creates the screen.
+        /// </summary>
+        /// <param name="accidentId">The accident id.</param>
+        private void CreateScreen(int accidentId)
+        {
+            Cursor.Current = Cursors.WaitCursor;
+
+            try
+            {
+                // Source and Type
+                this.detectionAccidentTypeList = DetectionProxy.GetDetectionAccidentTypes();
+                this.detectionSourceList = DetectionProxy.GetSource();
+
+                // Get Actuel Accident Data
+                this.currentAccident = AccidentProxy.GetAccidentById(accidentId);
+
+                if (this.currentAccident != null)
+                {
+                    this.federation = this.currentAccident.Federation.GetValueOrDefault(0);
+
+                    // CHANGED BY RONALD - 6/1/2009 - Troubles with conversion: use format 0:11
+                    string nationalNumber = this.currentAccident.MemberNiss.GetValueOrDefault(0).ToString(CultureInfo.CurrentCulture).PadLeft(11, '0');
+
+                    //Build Detection Grid
+                    this.currentDetections = DetectionProxy.GetDetectionsByAccidentId(this.federation, this.currentAccident.AccidentId.Value);
+                    if (this.currentDetections != null)
+                    {
+                        dtgDetections.DataSource = PrepareDetectionTable(this.currentDetections);
+
+                        //Build Bind Grid
+                        this.accidentsToLink = AccidentProxy.GetAccidentsByNationalNumber(this.federation, nationalNumber);
+                        this.accidentsToLink = (from a in this.accidentsToLink
+                                                where a.AccidentId != this.currentAccident.AccidentId
+                                                select a).ToList();
+
+                        this.allDetections = DetectionProxy.GetDetectionsByNationalNumber(this.federation, nationalNumber);
+
+                        // modif by luc 02/02/2010. We don't need 2 accident lists I suppose.
+                        // delete part accident in array with LINQ
+                        using (DataSet ds = new DataSet())
+                        {
+                            ds.Locale = CultureInfo.CurrentCulture;
+
+                            ds.Tables.Add(PrepareAccidentTable(this.accidentsToLink));    // LUC 02/02/2010
+                            ds.Tables.Add(PrepareDetectionTable(this.allDetections));
+                            DataRelation dr1 = new DataRelation("Detection", ds.Tables["Accident"].Columns["AccidentId"], ds.Tables["Detection"].Columns["AccidentId"], false);
+                            ds.Relations.Add(dr1);
+
+                            dtgtLink.DataMember = "Accident";
+                            dtgtLink.DataSource = ds;
+                        }
+
+                        CheckExistingDossier();
+
+                        // Buttons Associate and Detail may not be enabled when no possible associated accidents are present (comment Ronald)
+                        // modif by luc 02/02/2008
+                        if (this.accidentsToLink == null || !this.accidentsToLink.Any())
+                        {
+                            btnLink.Enabled = false;
+                            btnDetail.Enabled = false;
+                        }
+                        else
+                        {
+                            btnDetail.Enabled = true;
+                        }
+                    }
+                }
+            }
+            catch (FaultException<FaultDetail> fex)
+            {
+                A136Helper.ErrorMessage(fex, Properties.Resources.ErrorOtherError);
+            }
+            finally
+            {
+                Cursor.Current = Cursors.Default;
+            }
+        }
+
+        /// <summary> Creates the screen.
+        /// </summary>
+        /// <param name="accident">The accident.</param>
+        /// <param name="otherAccidents">The other accidents.</param>
+        /// <param name="inquiry">The inquiry.</param>
+        private void CreateScreen(List<Accident> otherAccidents, InquiryFull inquiry)
+        {
+            Cursor.Current = Cursors.WaitCursor;
+            try
+            {
+                this.inquiryPhases = InquiryProxy.GetInquiryPhase(string.Empty, "All", UserClient.Login);
+
+                // UnsubScribe from dgDetect.InitializeLayout and dgDetect.InitializeRow:
+                dtgDetections.DataSourceChanged -= new System.EventHandler(this.dtgDetections_DataSourceChanged);
+                // TODO!!!  dtgDetections.AfterSelectChange -= new Infragistics.Win.UltraWinGrid.AfterSelectChangeEventHandler(dgDetect_AfterSelectChange);
+                // Subscribe to new eventhandlers:
+                dtgDetections.DataSourceChanged += new System.EventHandler(this.dtgDetections_DataSourceChanged_Alternative);
+                // TODO!!!  dtgDetections.AfterSelectChange += new Infragistics.Win.UltraWinGrid.AfterSelectChangeEventHandler(dgDetect_AfterSelectChange_Alternative);
+
+                ///Show accident:
+                this.federation = this.currentAccident.Federation.GetValueOrDefault(0);
+
+                // Show OtherAccidents
+                this.accidentsToLink = otherAccidents;
+                dtgtLink.DataMember = "Accident";
+                dtgtLink.DataSource = PrepareAccidentTable(this.accidentsToLink);
+
+                // *Show Inquiry from wich the we are redirected:
+                List<Inquiry> inquirylist = new List<Inquiry>()
+                {
+                        new Inquiry()
+                        {
+                            AccidentId = inquiry.AccidentId,
+                            DateCreated = inquiry.DateCreated,
+                            DateModif = inquiry.DateModif,
+                            DatePhase = inquiry.DatePhase,
+                            DateRappel = inquiry.DateRappel,
+                            Federation = inquiry.Federation,
+                            InquiryId = inquiry.InquiryId,
+                            InquiryNum = inquiry.InquiryNum,
+                            IsComplete = inquiry.IsComplete,
+                            MemberNiss = inquiry.MemberNiss,
+                            PhaseId = inquiry.PhaseId,
+                            RappelId = inquiry.RappelId,
+                            Status = string.Empty,
+                            TitularNiss = inquiry.TitularNiss,
+                            UserCreated = inquiry.UserCreated,
+                            UserModif = inquiry.UserModif
+                        }
+                };
+
+                dtgDetections.DataSource = PrepareInquiryTable(inquirylist);
+
+                CheckExistingDossier();
+            }
+            catch (FaultException<FaultDetail> fex)
+            {
+                A136Helper.ErrorMessage(fex, Properties.Resources.ErrorOtherError);
+            }
+            finally
+            {
+                Cursor.Current = Cursors.Default;
+            }
+        }
+
+        /// <summary> Checks the existing dossier.
+        /// </summary>
+        private void CheckExistingDossier()
+        {
+            try
+            {
+                //Verify for a Folder
+                List<Dossier> linkedDossiers = DossierProxy.GetDossiers(this.federation, this.currentAccident.AccidentId.Value.ToString(CultureInfo.CurrentCulture), "AccidentIdentity");
+                if (linkedDossiers != null && linkedDossiers.Any())
+                {
+                    btnLink.Enabled = false;
+
+                    lblInfo.Text = Properties.Resources.AccidentLabelInfo;
+                }
+                else
+                {
+                    btnLink.Enabled = true;
+                }
+            }
+            catch (FaultException<FaultDetail> fex)
+            {
+                A136Helper.ErrorMessage(fex, Properties.Resources.ErrorRecupDossier);
+            }
+            catch (Exception)
+            {
+                throw;
+            }
+        }
+
+        /// <summary>Initializes the header.
+        /// </summary>
+        private void InitializeHeader()
+        {
+            //clear header
+            pnlHeader.Controls.Clear();
+            //add header
+            this.header = new AccidentHeader(this.currentAccident);
+            pnlHeader.Controls.Add(header);
+        }
+
+        /// <summary> Translate all visible informations in the curent language
+        /// </summary>
+        private void TranslateComponent()
+        {
+            grbDetections.Text = Properties.Resources.AccidentLabelGPActu;
+            grbLink.Text = Properties.Resources.AccidentLabeGpAssoc;
+
+            btnCancel.Text = Properties.Resources.Close;
+            btnDetail.Text = Properties.Resources.LabelDetail;
+            btnLink.Text = Properties.Resources.AccidentButtonAssoc;
+            btnPrintInquiry.Text = Properties.Resources.AccidentButtonImprim;
+        }
+
+        /// <summary> Clears to do.
+        /// </summary>
+        private void ClearToDo()
+        {
+            if (this.toDoId != 0)
+            {
+                TodoProxy.UnSetRead(toDoId);
+            }
+        }
+
+        /// <summary> Prepares the detection table.
+        /// </summary>
+        /// <param name="detectionList">The detection list.</param>
+        /// <returns>Data Table detection</returns>
+        private DataTable PrepareDetectionTable(List<Detection> detectionList)
+        {
+            DataTable detectionTable = detectionList.ToDataTable();
+
+            // Add rownumber to grid in first column
+            if (detectionTable.Rows != null)
+            {
+                if (!detectionTable.Columns.Contains("SourceDesc"))
+                {
+                    detectionTable.Columns.Add("SourceDesc", typeof(string));
+                }
+
+                if (!detectionTable.Columns.Contains("StatusDesc"))
+                {
+                    detectionTable.Columns.Add("StatusDesc", typeof(string));
+                }
+
+                if (!detectionTable.Columns.Contains("AccTypeDesc"))
+                {
+                    detectionTable.Columns.Add("AccTypeDesc", typeof(string));
+                }
+
+                if (!detectionTable.Columns.Contains(Detection.IsInquirySendFieldName + "_checkbox"))
+                {
+                    detectionTable.Columns.Add(Detection.IsInquirySendFieldName + "_checkbox", typeof(bool));
+                }
+
+                for (int i = 0; i < detectionTable.Rows.Count; i++)
+                {
+                    DetectionSource detectionSource = this.detectionSourceList.FirstOrDefault(d => d.DetectionSourceId.Value == ParsingString.ParseToInt(detectionTable.Rows[i][Detection.DetectionSourceIdFieldName].ToString()));
+
+                    if (detectionSource != null)
+                    {
+                        if (CultureInfo.CurrentCulture.Name == "nl-BE")
+                        {
+                            detectionTable.Rows[i]["SourceDesc"] = detectionSource.DescriptionNl;
+                        }
+                        else
+                        {
+                            detectionTable.Rows[i]["SourceDesc"] = detectionSource.DescriptionFr;
+                        }
+
+                        string detectionNumber = detectionTable.Rows[i][Detection.DetectionNumFieldName].ToString();
+                        if (detectionNumber.Substring(4, 1) != "/")
+                        {
+                            detectionTable.Rows[i][Detection.DetectionNumFieldName] = A136Helper.VisualizeDetectionNum(detectionNumber, detectionSource.DetectionSrcCode);
+                        }
+                    }
+
+                    DetectionAccidentType detectionAccidentType = this.detectionAccidentTypeList.FirstOrDefault(d => d.DetAccTypeId.Value == ParsingString.ParseToInt(detectionTable.Rows[i][Detection.DetAccTypeIdFieldName].ToString()));
+
+                    if (detectionAccidentType != null)
+                    {
+                        if (CultureInfo.CurrentCulture.Name == "nl-BE")
+                        {
+                            detectionTable.Rows[i]["AccTypeDesc"] = detectionAccidentType.DescriptionNl;
+                        }
+                        else
+                        {
+                            detectionTable.Rows[i]["AccTypeDesc"] = detectionAccidentType.DescriptionFr;
+                        }
+                    }
+
+                    detectionTable.Rows[i][Detection.IsInquirySendFieldName + "_checkbox"] = detectionTable.Rows[i][Detection.IsInquirySendFieldName].ToString() == "1";
+                    detectionTable.Rows[i]["StatusDesc"] = detectionTable.Rows[i][Detection.StatusFieldName].ToString().Equals("O") ? Properties.Resources.LabelTreated : string.Empty;
+                }
+            }
+
+            return detectionTable;
+        }
+
+        /// <summary> Prepares the accident table.
+        /// </summary>
+        /// <param name="accidentList">The accident list.</param>
+        /// <returns>Data Table accident.</returns>
+        private DataTable PrepareAccidentTable(List<Accident> accidentList)
+        {
+            DataTable accidentTable = accidentList.ToDataTable();
+
+            // Add rownumber to grid in first column
+            if (accidentTable.Rows != null)
+            {
+                if (!accidentTable.Columns.Contains("AccidentTypeDesc"))
+                {
+                    accidentTable.Columns.Add("AccidentTypeDesc", typeof(string));
+                }
+
+                if (!accidentTable.Columns.Contains("DecisionCodeStr"))
+                {
+                    accidentTable.Columns.Add("DecisionCodeStr", typeof(string));
+                }
+
+                for (int i = 0; i < accidentTable.Rows.Count; i++)
+                {
+                    AccidentType accidentType = AccidentProxy.GetAccidentTypeById(ParsingString.ParseToShort(accidentTable.Rows[i][Accident.AccidentTypeIdFieldName].ToString()));
+
+                    if (accidentType != null)
+                    {
+                        accidentTable.Rows[i]["AccidentTypeDesc"] = (CultureInfo.CurrentUICulture.Name.ToLower().Contains("fr")) ? accidentType.DescriptionFr : accidentType.DescriptionNl;
+                    }
+
+                    if (accidentTable.Rows[i][Accident.DecisionCodeFieldName] != null)
+                    {
+                        accidentTable.Rows[i]["DecisionCodeStr"] = Properties.Resources.ResourceManager.GetString(accidentTable.Rows[i][Accident.DecisionCodeFieldName].ToString());
+                    }
+
+                    string accidentNumber = accidentTable.Rows[i][Accident.AccidentNumFieldName].ToString();
+                    if (!string.IsNullOrEmpty(accidentNumber))
+                    {
+                        if (accidentNumber.Substring(4, 1) != "/")
+                        {
+                            accidentTable.Rows[i][Accident.AccidentNumFieldName] = A136Helper.VisualizeAccidentNum(accidentNumber);
+                        }
+                    }
+                }
+            }
+
+            return accidentTable;
+        }
+
+        /// <summary> Prepares the inquiry table.
+        /// </summary>
+        /// <param name="inquiryList">The inquiry list.</param>
+        /// <returns>Data Table inquiry.</returns>
+        private DataTable PrepareInquiryTable(List<Inquiry> inquiryList)
+        {
+            DataTable inquiryTable = inquiryList.ToDataTable();
+
+            if (inquiryTable.Rows != null)
+            {
+                if (!inquiryTable.Columns.Contains("StatusDesc"))
+                {
+                    inquiryTable.Columns.Add("StatusDesc", typeof(string));
+                }
+
+                if (!inquiryTable.Columns.Contains("Phase"))
+                {
+                    inquiryTable.Columns.Add("Phase", typeof(string));
+                }
+
+                if (!inquiryTable.Columns.Contains(Inquiry.IsCompleteFieldName + "_checkbox"))
+                {
+                    inquiryTable.Columns.Add(Inquiry.IsCompleteFieldName + "_checkbox", typeof(bool));
+                }
+
+                for (int i = 0; i < inquiryTable.Rows.Count; i++)
+                {
+                    string helpInquiryNumber = inquiryTable.Rows[i][Inquiry.InquiryNumFieldName].ToString();
+                    if (helpInquiryNumber.Substring(4, 1) != "/")
+                    {
+                        inquiryTable.Rows[i][Inquiry.InquiryNumFieldName] = A136Helper.VisualizeInquiryNum(helpInquiryNumber);
+                    }
+
+                    string phase = string.Empty;
+                    if (inquiryTable.Rows[i][Inquiry.PhaseIdFieldName] != null && !string.IsNullOrEmpty(inquiryTable.Rows[i][Inquiry.PhaseIdFieldName].ToString()))
+                    {
+                        int id = ParsingString.ParseToInt(inquiryTable.Rows[i][Inquiry.PhaseIdFieldName].ToString());
+                        InquiryPhase inquiryPhase = this.inquiryPhases.FirstOrDefault(ip => ip.PhaseId == id);
+
+                        if (inquiryPhase != null)
+                        {
+                            if (CultureInfo.CurrentCulture.Name == "nl-BE")
+                            {
+                                inquiryTable.Rows[i]["Phase"] = inquiryPhase.DescriptionNl;
+                            }
+                            else
+                            {
+                                inquiryTable.Rows[i]["Phase"] = inquiryPhase.DescriptionFr;
+                            }
+                        }
+
+                    }
+
+                    if (inquiryTable.Rows[i][Inquiry.StatusFieldName].ToString() == "O")
+                    {
+                        inquiryTable.Rows[i]["StatusDesc"] = string.Empty;
+                    }
+                    else
+                    {
+                        inquiryTable.Rows[i]["StatusDesc"] = Properties.Resources.LabelTreated;
+                    }
+
+                    if (2 == ParsingString.ParseToInt(inquiryTable.Rows[i][Inquiry.IsCompleteFieldName].ToString()))
+                    {
+                        inquiryTable.Rows[i][Inquiry.IsCompleteFieldName + "_checkbox"] = true;
+                    }
+                    else
+                    {
+                        inquiryTable.Rows[i][Inquiry.IsCompleteFieldName + "_checkbox"] = false;
+                    }
+                }
+            }
+
+            return inquiryTable;
+        }
+
+        /// <summary> Treats to do.
+        /// </summary>
+        private void TreatToDo()
+        {
+            if (this.toDoId != 0)
+            {
+                TodoProxy.SetTreated(this.toDoId);
+            }
+        }
+
+        /// <summary> Closes the screen.
+        /// </summary>
+        private void CloseScreen()
+        {
+            if (!this.isFromInquiry)
+            {
+                ClearToDo();
+            }
+
+            A136Helper.MainScreen.CloseScreen(this.group, this.key, this.previousGroup, this.previousKey, true);
+        }
+        #endregion
+    }
+}
